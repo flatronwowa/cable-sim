@@ -1,0 +1,10 @@
+[configuration]
+
+entry_symbol = "cable_library_init"
+compatibility_minimum = "4.5"
+
+[libraries]
+
+macos.editor = "res://bin/libcable.macos.editor.framework"
+macos.template_debug = "res://bin/libcable.macos.template_debug.framework"
+macos.template_release = "res://bin/libcable.macos.template_release.framework"

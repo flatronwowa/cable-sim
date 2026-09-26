@@ -1,0 +1,27 @@
+# Build artifacts
+*.os
+*.obj
+*.o
+*.so
+*.dylib
+*.dll
+*.lib
+*.pdb
+*.exp
+.sconsign.dblite
+src/gen/
+.sconf_temp/
+config.log
+compile_commands.json
+project/bin/*.framework/
+project/bin/*.so
+project/bin/*.dylib
+project/bin/*.dll
+
+# Godot
+project/.godot/
+project/android/
+export_presets.cfg
+
+# macOS
+.DS_Store
