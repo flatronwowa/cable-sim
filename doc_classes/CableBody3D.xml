@@ -4,12 +4,201 @@
 		Физический кабель конечной длины и толщины.
 	</brief_description>
 	<description>
+		Кабель моделируется цепочкой частиц, которую решает XPBD-солвер по схеме Small Steps: много подшагов, одна итерация на подшаг. Сохраняется физическая длина, кабель не проходит сквозь collision geometry, лежит на поверхностях с трением и покоящимися контактами, перегибается через рёбра и пересекается сам с собой.
+		Концы задаются через [member anchor_a] и [member anchor_b]. Конец [member anchor_b] считается катушкой: по мере удаления с него сматывается кабель, пока не израсходован [member cable_length]. Обратной смотки нет.
+		Контроллер игрока должен пропускать своё перемещение через [method constrain_motion] — так же, как [code]move_and_slide[/code], то есть до фактического переноса узла. Когда кабель натянут до предела, лишнее перемещение гасится и приходит сигнал [signal taut_limit_reached].
+		Солвер не обращается к физике движка на каждую частицу: геометрия мира раз в кадр переписывается снапшотом в собственные примитивы, треугольные сетки закрываются BVH по расстоянию. Поэтому стоимость кадра зависит от числа частиц и числа подшагов, а подшаги растут вместе со скоростью кабеля — это цена защиты от прострела.
 	</description>
 	<tutorials>
 	</tutorials>
+	<methods>
+		<method name="add_collision_exception">
+			<return type="void" />
+			<param index="0" name="node" type="Node" />
+			<description>
+				Исключает тело из коллизий кабеля. Нужно как минимум для самого игрока, который несёт катушку: иначе кабель упирается в его коллайдер.
+			</description>
+		</method>
+		<method name="clear_collision_exceptions">
+			<return type="void" />
+			<description>
+				Убирает все исключения коллизий.
+			</description>
+		</method>
+		<method name="constrain_motion">
+			<return type="Vector3" />
+			<param index="0" name="from" type="Vector3" />
+			<param index="1" name="to" type="Vector3" />
+			<description>
+				Возвращает разрешённую позицию вместо [param to]. Пока на катушке остаётся кабель, [param to] возвращается без изменений. Когда кабель израсходован, гасится только компонента перемещения, направленная прочь от последней точки перегиба: движение вбок и обратно не ограничивается.
+				Вызывать до перемещения узла игрока, иначе ограничение отстаёт на кадр.
+			</description>
+		</method>
+		<method name="get_awake_particle_count" qualifiers="const">
+			<return type="int" />
+			<description>
+				Число частиц, которые солвер считал на последнем кадре. Лежащий и не тронутый участок кабеля засыпает, поэтому это число обычно много меньше [method get_particle_count].
+			</description>
+		</method>
+		<method name="get_centerline" qualifiers="const">
+			<return type="PackedVector3Array" />
+			<description>
+				Центральная линия кабеля в world space, по одной точке на частицу.
+			</description>
+		</method>
+		<method name="get_contact_count" qualifiers="const">
+			<return type="int" />
+			<description>
+				Число частиц с активным контактом. Диагностика: помогает понять, лежит ли кабель или висит.
+			</description>
+		</method>
+		<method name="get_deployed_length" qualifiers="const">
+			<return type="float" />
+			<description>
+				Длина уже размотанного кабеля в метрах, считая по проложенному пути.
+			</description>
+		</method>
+		<method name="get_particle_count" qualifiers="const">
+			<return type="int" />
+			<description>
+				Полное число частиц. Растёт по мере размотки.
+			</description>
+		</method>
+		<method name="get_remaining_length" qualifiers="const">
+			<return type="float" />
+			<description>
+				Остаток на катушке в метрах. Ноль означает, что кабель натянут до предела и [method constrain_motion] начнёт ограничивать игрока.
+			</description>
+		</method>
+		<method name="get_substep_count" qualifiers="const">
+			<return type="int" />
+			<description>
+				Число подшагов на последнем кадре. Выводится из максимальной скорости частиц и зажато между [member substeps_min] и [member substeps_max]. Главный показатель стоимости кадра.
+			</description>
+		</method>
+		<method name="get_tension" qualifiers="const">
+			<return type="float" />
+			<description>
+				Максимальное натяжение в ньютонах, взятое из lambda натяжных constraint. Годится как вход для звука, тряски камеры или замедления игрока.
+			</description>
+		</method>
+		<method name="get_tension_direction" qualifiers="const">
+			<return type="Vector3" />
+			<description>
+				Единичное направление, в котором кабель тянет катушку.
+			</description>
+		</method>
+		<method name="rebuild_cable">
+			<return type="void" />
+			<description>
+				Пересобирает цепочку частиц с нуля и расслабляет её в начальную позу. Вызывается автоматически при смене геометрических параметров; вручную нужен после телепорта или загрузки сохранения.
+			</description>
+		</method>
+		<method name="remove_collision_exception">
+			<return type="void" />
+			<param index="0" name="node" type="Node" />
+			<description>
+				Возвращает тело в коллизии кабеля.
+			</description>
+		</method>
+	</methods>
 	<members>
-		<member name="cable_length" type="float" setter="set_cable_length" getter="get_cable_length" default="1.0">
+		<member name="anchor_a" type="NodePath" setter="set_anchor_a" getter="get_anchor_a" default="NodePath(&quot;&quot;)">
+			Неподвижный конец кабеля — например, разъём в стене. Если путь пуст, конец свободен.
+		</member>
+		<member name="anchor_b" type="NodePath" setter="set_anchor_b" getter="get_anchor_b" default="NodePath(&quot;&quot;)">
+			Конец на катушке, обычно узел игрока. Именно от его перемещения идёт размотка.
+		</member>
+		<member name="anchor_stiffness_compliance" type="float" setter="set_anchor_stiffness_compliance" getter="get_anchor_stiffness_compliance" default="0.01">
+			Податливость ориентации кабеля на выходе из разъёма. Ноль даёт жёсткую заделку, большие значения — свободный шарнир. Почти жёсткая заделка здесь непригодна: это стиснутый актуатор на плече в один сегмент, он дёргает соседнюю частицу каждый подшаг, и эта энергия уходит по цепи в весь кабель.
+		</member>
+		<member name="axial_stiffness" type="float" setter="set_axial_stiffness" getter="get_axial_stiffness" default="100000.0">
+			Осевая жёсткость EA в ньютонах. Используется только contact-free прототипом [constant IMPLICIT_V2].
+		</member>
+		<member name="bending_compliance" type="float" setter="set_bending_compliance" getter="get_bending_compliance" default="0.0005">
+			Податливость изгиба. Меньше — жёстче кабель. Ноль делает кабель прямым как палка.
+		</member>
+		<member name="cable_length" type="float" setter="set_cable_length" getter="get_cable_length" default="10.0">
 			Физическая длина кабеля в метрах.
 		</member>
+		<member name="cable_material" type="Material" setter="set_cable_material" getter="get_cable_material">
+			Материал для меша кабеля. Координата U идёт по длине кабеля, V — по обходу сечения.
+		</member>
+		<member name="cable_radius" type="float" setter="set_cable_radius" getter="get_cable_radius" default="0.015">
+			Радиус кабеля. Задаёт и толщину меша, и расстояние, на котором частица останавливается перед поверхностью, и порог самопересечения.
+		</member>
+		<member name="collide_with_areas" type="bool" setter="set_collide_with_areas" getter="is_collide_with_areas" default="false">
+			Учитывать ли [Area3D] при сборке снапшота геометрии.
+		</member>
+		<member name="collide_with_bodies" type="bool" setter="set_collide_with_bodies" getter="is_collide_with_bodies" default="true">
+			Учитывать ли физические тела при сборке снапшота геометрии.
+		</member>
+		<member name="collision_margin" type="float" setter="set_collision_margin" getter="get_collision_margin" default="0.002">
+			Зазор поверх [member cable_radius]. Небольшой запас убирает мерцание меша на границе контакта.
+		</member>
+		<member name="collision_mask" type="int" setter="set_collision_mask" getter="get_collision_mask" default="-1">
+			Слои, с которыми кабель сталкивается.
+		</member>
+		<member name="damping" type="float" setter="set_damping" getter="get_damping" default="30.0">
+			Внутреннее вязкое трение кабеля, 1/с. Гасится относительная скорость соседних частиц, поэтому бегущие по длине волны затухают, а свободное падение и перенос кабеля игроком не замедляются. Ноль означает, что энергия не рассеивается вообще и уложенный кабель дрожит бесконечно. Слишком большие значения превращают кабель в жёсткий проводник импульса: рывок на одном конце начинает отзываться на другом.
+		</member>
+		<member name="debug_draw_enabled" type="bool" setter="set_debug_draw_enabled" getter="is_debug_draw_enabled" default="false">
+			Отладочная отрисовка: частицы, окрашенные по состоянию сна, сегменты по натяжению, нормали и якоря контактов, зона интереса.
+		</member>
+		<member name="dynamic_friction" type="float" setter="set_dynamic_friction" getter="get_dynamic_friction" default="0.7">
+			Коэффициент трения скольжения. Работает, когда контакт уже сорвался с места.
+		</member>
+		<member name="gravity_scale" type="float" setter="set_gravity_scale" getter="get_gravity_scale" default="1.0">
+			Множитель гравитации проекта.
+		</member>
+		<member name="mass_per_meter" type="float" setter="set_mass_per_meter" getter="get_mass_per_meter" default="0.2">
+			Линейная плотность в кг/м. Влияет на провис и на масштаб чисел из [method get_tension].
+		</member>
+		<member name="minimum_bend_radius" type="float" setter="set_minimum_bend_radius" getter="get_minimum_bend_radius" default="0.15">
+			Минимальный радиус изгиба: кабель не даёт сложить себя в шпильку туже этого радиуса. Ноль отключает ограничение.
+		</member>
+		<member name="radial_segments" type="int" setter="set_radial_segments" getter="get_radial_segments" default="8">
+			Число сегментов по обходу сечения трубки. Меняет только меш.
+		</member>
+		<member name="self_collision_enabled" type="bool" setter="set_self_collision_enabled" getter="is_self_collision_enabled" default="true">
+			Самопересечение. Без него петля, наброшенная на колонну, проваливается сама в себя.
+		</member>
+		<member name="simulation_enabled" type="bool" setter="set_simulation_enabled" getter="is_simulation_enabled" default="true">
+			Выключает шаг солвера, оставляя кабель в текущей позе.
+		</member>
+		<member name="sleep_enabled" type="bool" setter="set_sleep_enabled" getter="is_sleep_enabled" default="true">
+			Усыпление неподвижных лежащих участков. Основной запас производительности на длинном кабеле.
+		</member>
+		<member name="solver_iterations" type="int" setter="set_solver_iterations" getter="get_solver_iterations" default="1">
+			Итераций на подшаг. В схеме Small Steps правильное значение — единица: точность набирается подшагами, а не итерациями. Значения выше единицы сейчас ухудшают поведение, а не улучшают: по замерам при двух итерациях кабель перестаёт укладываться и засыпать, при четырёх скорости доходят до 27 м/с при скорости игрока 3 м/с. Причина найдена не полностью, поэтому увеличивать значение не следует.
+		</member>
+		<member name="solver_backend" type="int" setter="set_solver_backend" getter="get_solver_backend" enum="CableBody3D.SolverBackend" default="0">
+			Физический backend. По умолчанию остаётся [constant LEGACY_XPBD]; [constant IMPLICIT_V2] пока является только contact-free profiling prototype.
+		</member>
+		<member name="static_friction" type="float" setter="set_static_friction" getter="get_static_friction" default="0.9">
+			Коэффициент трения покоя. Определяет, при каком натяжении лежащий кабель срывается с места.
+		</member>
+		<member name="stretch_compliance" type="float" setter="set_stretch_compliance" getter="get_stretch_compliance" default="0.0">
+			Податливость на растяжение. Ноль означает нерастяжимый кабель и обычно и нужен.
+		</member>
+		<member name="substeps_max" type="int" setter="set_substeps_max" getter="get_substeps_max" default="16">
+			Верхняя граница числа подшагов. Снижение экономит кадр, но повышает риск прострела быстро летящего кабеля сквозь тонкую геометрию.
+		</member>
+		<member name="substeps_min" type="int" setter="set_substeps_min" getter="get_substeps_min" default="2">
+			Нижняя граница числа подшагов.
+		</member>
+		<member name="target_segment_length" type="float" setter="set_target_segment_length" getter="get_target_segment_length" default="0.06">
+			Желаемая длина сегмента. Меньше — точнее огибание мелких деталей и дороже кадр. Ниже двух радиусов кабеля значение не опускается.
+		</member>
+		<member name="v2_bending_stiffness" type="float" setter="set_v2_bending_stiffness" getter="get_v2_bending_stiffness" default="0.01">
+			Изгибная жёсткость EI в Н·м². Используется только contact-free прототипом [constant IMPLICIT_V2].
+		</member>
 	</members>
+	<signals>
+		<signal name="taut_limit_reached">
+			<description>
+				Кабель размотан до конца, и [method constrain_motion] начал ограничивать перемещение. Приходит один раз на вход в это состояние.
+			</description>
+		</signal>
+	</signals>
 </class>

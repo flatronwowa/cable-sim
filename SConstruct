@@ -4,6 +4,7 @@ env = SConscript("godot-cpp/SConstruct")
 
 env.Append(CPPPATH=["src/"])
 sources = Glob("src/*.cpp") + Glob("src/nodes/*.cpp") + Glob("src/solver/*.cpp")
+sources += Glob("src/solver/v2/*.cpp")
 
 # Godot generates docs for GDExtension classes on load; without linked doc data
 # the editor crashes in EditorHelp::_gen_extensions_docs().
